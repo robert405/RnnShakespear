@@ -95,8 +95,8 @@ optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 #4366250 / 25 -> 174650, 174650 / 25 -> 6986
 
 loopStep = 25 + batch_size
-nbEpoch = 1
-nbChar = 50000# len(strList) - loopStep - 1
+nbEpoch = 3
+nbChar = len(strList) - loopStep - 1
 lossList = []
 stepCounter = 1
 totalStep = int((nbChar / loopStep) * nbEpoch)
