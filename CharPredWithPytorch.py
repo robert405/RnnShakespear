@@ -3,6 +3,7 @@ import torch.nn as nn
 import numpy as np
 import matplotlib.pyplot as plt
 from random import randint
+import time
 
 def predToOneHot(pred):
 
@@ -101,6 +102,8 @@ lossList = []
 stepCounter = 1
 totalStep = int((nbChar / loopStep) * nbEpoch)
 
+start = time.time()
+
 for k in range(nbEpoch):
 
     for i in range(0, nbChar, loopStep):
@@ -137,6 +140,8 @@ for k in range(nbEpoch):
         stepCounter += 1
 
 
+end = time.time()
+print("Time to run in second : " + str(end - start))
 
 testName = "RnnPytorchImplementation"
 
@@ -164,7 +169,7 @@ for char in charsToTest:
     for vect in predictions:
 
         bestOptions = vect[0].argsort()[::-1]
-        index = int(vect[0][bestOptions[np.random.randint(0,3)]])
+        index = int(bestOptions[np.random.randint(0,3)])
         strPred += allChar[index]
 
     strPred += "\n\n\n"
