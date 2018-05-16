@@ -65,16 +65,16 @@ class SimpleRNN(nn.Module):
     def forward(self, inputs, train=True, steps=0):
 
         if train or steps == 0:
-            steps = inputs.size()[0]
+            steps = inputs.size()[1]
 
-        outputs = torch.zeros(steps, inputs.size()[1], vectSize)
+        outputs = torch.zeros(inputs.size()[0], steps, vectSize)
 
-        hx = torch.zeros(inputs.size()[1], self.hidden_size).cuda()
-        cx = torch.zeros(inputs.size()[1], self.hidden_size).cuda()
+        hx = torch.zeros(inputs.size()[0], self.hidden_size).cuda()
+        cx = torch.zeros(inputs.size()[0], self.hidden_size).cuda()
 
         for i in range(steps):
             if train or i == 0:
-                input = inputs[i]
+                input = inputs[:,i]
             else:
                 input = output
 
@@ -82,7 +82,7 @@ class SimpleRNN(nn.Module):
             hx, cx = self.rnn(input, (hx, cx))
             output = self.out(hx)
 
-            outputs[i] = output
+            outputs[:,i] = output
 
         return outputs, (hx,cx)
 
@@ -94,9 +94,9 @@ optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
 # how many char in the dataset and how separate to make batche size of 25 x 25
 #4366250 / 25 -> 174650, 174650 / 25 -> 6986
-
-loopStep = 25 + batch_size
-nbEpoch = 3
+seqLength = 25 # real length is 24, 25 take into account last predicted label
+loopStep = seqLength * batch_size
+nbEpoch = 20
 nbChar = len(strList) - loopStep - 1
 lossList = []
 stepCounter = 1
@@ -110,17 +110,17 @@ for k in range(nbEpoch):
 
         matrix = []
 
-        for j in range(25):
+        for j in range(batch_size):
 
-            idx = i+j
-            matrix += [vectList[idx:idx+batch_size]]
+            idx = i+(j*seqLength)
+            matrix += [vectList[idx:idx+seqLength]]
 
         matrix = np.array(matrix)
 
-        xData = matrix[0:24]
+        xData = matrix[:,0:24]
         xData = torch.FloatTensor(xData).cuda()
 
-        yData = matrix[1:25]
+        yData = matrix[:,1:25]
         yData = np.argmax(yData, axis=2)
         yData = torch.LongTensor(yData)
         yData = yData.view(24*batch_size).cuda()
@@ -128,7 +128,7 @@ for k in range(nbEpoch):
         outputs, hidden = model(xData, True)
 
         optimizer.zero_grad()
-        loss = criterion(outputs.view(-1, 77).cuda(), yData)
+        loss = criterion(outputs.view(24*batch_size, 77).cuda(), yData)
         loss.backward()
         optimizer.step()
 
@@ -139,9 +139,18 @@ for k in range(nbEpoch):
             print("Step : " + str(stepCounter) + " / " + str(totalStep) + ", Current Loss : " + str(currentLoss))
         stepCounter += 1
 
+    end = time.time()
+    timeTillNow = end - start
+    predictedRemainingTime = (timeTillNow / (k+1)) * (nbEpoch - (k + 1))
+    print("--------------------------------------------------------------------")
+    print("Finished epoch : " + str(k))
+    print("Time to run since started (sec) : " + str(timeTillNow))
+    print("Predicted remaining time (sec) : " + str(predictedRemainingTime))
+    print("--------------------------------------------------------------------")
+
 
 end = time.time()
-print("Time to run in second : " + str(end - start))
+print("Time taken to run (sec) : " + str(end - start))
 
 testName = "RnnPytorchImplementation"
 
@@ -165,10 +174,11 @@ for char in charsToTest:
 
     strPred += char
     predictions = outputs.cpu().numpy()
+    predictions = predictions[0]
 
     for vect in predictions:
 
-        bestOptions = vect[0].argsort()[::-1]
+        bestOptions = vect.argsort()[::-1]
         index = int(bestOptions[np.random.randint(0,3)])
         strPred += allChar[index]
 
