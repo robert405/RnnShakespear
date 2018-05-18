@@ -94,14 +94,16 @@ optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 #4366250 / 25 -> 174650, 174650 / 25 -> 6986
 
 seqLentgh = 25 # real length is 24, 25 for last label
-nbEpoch = 25
+nbEpoch = 30
 lossList = []
-decal = 5
+decal = 2
 
 start = time.time()
 
 for k in range(nbEpoch):
 
+    if (decal > 10):
+        decal = 2
     decal = decal + 1
     loopStep = seqLentgh + (batch_size * decal)
     nbChar = len(strList) - loopStep - 1
