@@ -60,35 +60,13 @@ class SimpleRNN(nn.Module):
         self.rnn = nn.LSTMCell(hidden_size, hidden_size)
         self.out = nn.Linear(hidden_size, vectSize)
 
-    def forward(self, inputs, steps=0):
+    def forward(self, input, memory, steps=0):
 
-        inputSize = inputs.size()[0]
+        input = self.inp(input)
+        hx, cx = self.rnn(input, memory)
+        output = self.out(hx)
 
-        if inputSize <= 0:
-            raise ValueError('No input given before generation')
-
-        outputs = torch.zeros(inputSize+steps, inputs.size()[1], vectSize).cuda()
-
-        hx = torch.zeros(inputs.size()[1], self.hidden_size).cuda()
-        cx = torch.zeros(inputs.size()[1], self.hidden_size).cuda()
-
-        for i in range(inputSize):
-
-            input = self.inp(inputs[i])
-            hx, cx = self.rnn(input, (hx, cx))
-            output = self.out(hx)
-
-            outputs[i] = output
-
-        for i in range(steps):
-
-            input = self.inp(output)
-            hx, cx = self.rnn(input, (hx, cx))
-            output = self.out(hx)
-
-            outputs[inputSize+i] = output
-
-        return outputs, (hx,cx)
+        return output, (hx,cx)
 
 model = SimpleRNN(nbNeuron).cuda()
 criterion = nn.MSELoss()
@@ -100,7 +78,7 @@ optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 #4366250 / 25 -> 174650, 174650 / 25 -> 6986
 
 seqLentgh = 25 # real length is 24, 25 for last label
-nbEpoch = 10
+nbEpoch = 5
 lossList = []
 decal = 1
 
@@ -127,28 +105,26 @@ for k in range(nbEpoch):
 
         data = np.array(data)
 
-        temp = []
-        for idx in range(seqLentgh):
-            temp += [data[:,idx]]
+        fullLoss = torch.zeros(1).cuda()
 
-        data = np.array(temp)
+        hx = torch.zeros(batch_size, nbNeuron).cuda()
+        cx = torch.zeros(batch_size, nbNeuron).cuda()
+        hidden = (hx,cx)
 
-        xData = data[0:24]
-        xData = torch.FloatTensor(xData).cuda()
+        for idx in range(seqLentgh-1):
 
-        yData = data[1:25]
-        #yData = np.argmax(yData, axis=2)
-        yData = torch.FloatTensor(yData).cuda()
-        #yData = yData.view(24*batch_size).cuda()
-
-        outputs, hidden = model(xData)
+            xData = torch.FloatTensor(data[:,idx]).cuda()
+            outputs, hidden = model(xData, hidden)
+            target = data[:,idx+1]
+            target = torch.FloatTensor(target).cuda()
+            loss = criterion(outputs, target)
+            fullLoss = torch.add(fullLoss, loss)
 
         optimizer.zero_grad()
-        loss = criterion(outputs, yData)
-        loss.backward()
+        fullLoss.backward()
         optimizer.step()
 
-        currentLoss = loss.data.cpu().numpy()
+        currentLoss = fullLoss.data.cpu().numpy()[0]
         lossList += [currentLoss]
 
         if (stepCounter % 500 == 0):
@@ -182,23 +158,33 @@ charsToTest = ["So shaken as we are, so wan with care,","Within this hour it wil
 
 for chars in charsToTest:
 
-    allPred = []
-    charVect = []
-
-    for char in chars:
-
-        charVect += [np.array([charToVect[char]])]
+    predictions = []
 
     with torch.no_grad():
-        charInput = torch.FloatTensor(np.array(charVect)).cuda()
-        outputs, hidden = model(charInput, 500)
 
-    strPred += char
-    predictions = outputs.cpu().numpy()
+        lastOutput = torch.zeros(1,vectSize).cuda()
+        hx = torch.zeros(1, nbNeuron).cuda()
+        cx = torch.zeros(1, nbNeuron).cuda()
+        hidden = (hx, cx)
+
+        for char in chars:
+            charVect = [charToVect[char]]
+            charVect = torch.FloatTensor(charVect).cuda()
+            output, hidden = model(charVect, hidden)
+            lastOutput = output
+            predictions += [output[0]]
+
+        for i in range(500):
+            output, hidden = model(lastOutput, hidden)
+            lastOutput = output
+            predictions += [output[0]]
+
+    strPred += ""
 
     for vect in predictions:
 
-        index = predToOneHot(vect[0])
+        npVect = vect.data.cpu().numpy()
+        index = predToOneHot(npVect)
         strPred += allChar[index]
 
     strPred += "\n\n\n"
