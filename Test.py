@@ -15,6 +15,14 @@ def predToOneHot(pred):
 
     return idx
 
+def randSeq(length, seq):
+
+    seqSize = len(seq)
+    randomInt = randint(0,seqSize-length-1)
+    randSeq = seq[randomInt, randomInt+length]
+
+    return randSeq
+
 # ==============================================================================
 # fetch data
 
@@ -78,7 +86,7 @@ optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 #4366250 / 25 -> 174650, 174650 / 25 -> 6986
 
 seqLentgh = 25 # real length is 24, 25 for last label
-nbEpoch = 5
+nbEpoch = 25
 lossList = []
 decal = 1
 
