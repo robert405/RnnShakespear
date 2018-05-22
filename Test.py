@@ -19,7 +19,7 @@ def randSeq(length, seq):
 
     seqSize = len(seq)
     randomInt = randint(0,seqSize-length-1)
-    randSeq = seq[randomInt, randomInt+length]
+    randSeq = seq[randomInt : randomInt+length]
 
     return randSeq
 
@@ -56,7 +56,7 @@ for char in strList:
 # ==============================================================================
 
 batch_size = 50
-nbNeuron = 128
+nbNeuron = 512
 
 class SimpleRNN(nn.Module):
     def __init__(self, hidden_size):
@@ -64,17 +64,21 @@ class SimpleRNN(nn.Module):
         super(SimpleRNN, self).__init__()
         self.hidden_size = hidden_size
 
-        self.inp = nn.Linear(vectSize, hidden_size)
-        self.rnn = nn.LSTMCell(hidden_size, hidden_size)
+        self.lin1 = nn.Linear(vectSize, hidden_size)
+        self.relu1 = nn.ReLU()
+        self.rnn1 = nn.LSTMCell(hidden_size, hidden_size)
+        self.rnn2 = nn.LSTMCell(hidden_size, hidden_size)
         self.out = nn.Linear(hidden_size, vectSize)
 
-    def forward(self, input, memory, steps=0):
+    def forward(self, xData, memory1, memory2):
 
-        input = self.inp(input)
-        hx, cx = self.rnn(input, memory)
-        output = self.out(hx)
+        xData = self.lin1(xData)
+        xData = self.relu1(xData)
+        hx1, cx1 = self.rnn1(xData, memory1)
+        hx2, cx2 = self.rnn2(hx1, memory2)
+        output = self.out(hx2)
 
-        return output, (hx,cx)
+        return output, (hx1,cx1), (hx2,cx2)
 
 model = SimpleRNN(nbNeuron).cuda()
 criterion = nn.MSELoss()
@@ -86,67 +90,57 @@ optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 #4366250 / 25 -> 174650, 174650 / 25 -> 6986
 
 seqLentgh = 25 # real length is 24, 25 for last label
-nbEpoch = 25
+nbIt = 1000000
 lossList = []
-decal = 1
 
 start = time.time()
 
-for k in range(nbEpoch):
+for i in range(nbIt):
 
-    if (decal > 10):
-        decal = 1
-    decal = decal + 1
-    loopStep = seqLentgh + (batch_size * decal)
-    nbChar = len(strList) - loopStep - 1
-    stepCounter = 0
-    epochStep = int(nbChar / loopStep)
+    data = []
 
-    for i in range(0, nbChar, loopStep):
+    for j in range(batch_size):
+        data += [randSeq(seqLentgh, vectList)]
 
-        data = []
+    data = np.array(data)
 
-        for j in range(batch_size):
+    fullLoss = torch.zeros(1).cuda()
 
-            idx = i+(j*decal)
-            data += [vectList[idx:idx+seqLentgh]]
+    hx1 = torch.zeros(batch_size, nbNeuron).cuda()
+    cx1 = torch.zeros(batch_size, nbNeuron).cuda()
+    hidden1 = (hx1,cx1)
 
-        data = np.array(data)
+    hx2 = torch.zeros(batch_size, nbNeuron).cuda()
+    cx2 = torch.zeros(batch_size, nbNeuron).cuda()
+    hidden2 = (hx2, cx2)
 
-        fullLoss = torch.zeros(1).cuda()
+    for idx in range(seqLentgh-1):
 
-        hx = torch.zeros(batch_size, nbNeuron).cuda()
-        cx = torch.zeros(batch_size, nbNeuron).cuda()
-        hidden = (hx,cx)
+        xData = torch.FloatTensor(data[:,idx]).cuda()
+        outputs, hidden1, hidden2 = model(xData, hidden1, hidden2)
+        target = data[:,idx+1]
+        target = torch.FloatTensor(target).cuda()
+        loss = criterion(outputs, target)
+        fullLoss = torch.add(fullLoss, loss)
 
-        for idx in range(seqLentgh-1):
+    optimizer.zero_grad()
+    fullLoss.backward()
+    optimizer.step()
 
-            xData = torch.FloatTensor(data[:,idx]).cuda()
-            outputs, hidden = model(xData, hidden)
-            target = data[:,idx+1]
-            target = torch.FloatTensor(target).cuda()
-            loss = criterion(outputs, target)
-            fullLoss = torch.add(fullLoss, loss)
+    currentLoss = fullLoss.data.cpu().numpy()[0]
+    lossList += [currentLoss]
 
-        optimizer.zero_grad()
-        fullLoss.backward()
-        optimizer.step()
+    if (i % 500 == 0):
+        print("Step : " + str(i) + " / " + str(nbIt) + ", Current Loss : " + str(currentLoss))
 
-        currentLoss = fullLoss.data.cpu().numpy()[0]
-        lossList += [currentLoss]
-
-        if (stepCounter % 500 == 0):
-            print("Epoch : " + str(k+1) + " / " + str(nbEpoch) + ", Step : " + str(stepCounter) + " / " + str(epochStep) + ", Current Loss : " + str(currentLoss))
-        stepCounter += 1
-
-    end = time.time()
-    timeTillNow = end - start
-    predictedRemainingTime = (timeTillNow / (k + 1)) * (nbEpoch - (k + 1))
-    print("--------------------------------------------------------------------")
-    print("Finished epoch : " + str(k))
-    print("Time to run since started (sec) : " + str(timeTillNow))
-    print("Predicted remaining time (sec) : " + str(predictedRemainingTime))
-    print("--------------------------------------------------------------------")
+    if (i % 5000 == 0):
+        end = time.time()
+        timeTillNow = end - start
+        predictedRemainingTime = (timeTillNow / (i + 1)) * (nbIt - (i + 1))
+        print("--------------------------------------------------------------------")
+        print("Time to run since started (sec) : " + str(timeTillNow))
+        print("Predicted remaining time (sec) : " + str(predictedRemainingTime))
+        print("--------------------------------------------------------------------")
 
 
 end = time.time()
@@ -171,19 +165,23 @@ for chars in charsToTest:
     with torch.no_grad():
 
         lastOutput = torch.zeros(1,vectSize).cuda()
-        hx = torch.zeros(1, nbNeuron).cuda()
-        cx = torch.zeros(1, nbNeuron).cuda()
-        hidden = (hx, cx)
+        hx1 = torch.zeros(batch_size, nbNeuron).cuda()
+        cx1 = torch.zeros(batch_size, nbNeuron).cuda()
+        hidden1 = (hx1, cx1)
+
+        hx2 = torch.zeros(batch_size, nbNeuron).cuda()
+        cx2 = torch.zeros(batch_size, nbNeuron).cuda()
+        hidden2 = (hx2, cx2)
 
         for char in chars:
             charVect = [charToVect[char]]
             charVect = torch.FloatTensor(charVect).cuda()
-            output, hidden = model(charVect, hidden)
+            output, hidden1, hidden2 = model(charVect, hidden1, hidden2)
             lastOutput = output
             predictions += [output[0]]
 
         for i in range(500):
-            output, hidden = model(lastOutput, hidden)
+            output, hidden1, hidden2 = model(lastOutput, hidden1, hidden2)
             lastOutput = output
             predictions += [output[0]]
 
