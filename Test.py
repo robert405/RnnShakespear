@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 import matplotlib.pyplot as plt
 from random import randint
@@ -45,7 +46,7 @@ vectSize = len(allChar) # = 77
 for char in allChar:
 
     vect = np.zeros(vectSize)
-    vect[index] = 3
+    vect[index] = 1
     charToVect[char] = vect
     index += 1
 
@@ -65,23 +66,21 @@ class SimpleRNN(nn.Module):
         self.hidden_size = hidden_size
 
         self.lin1 = nn.Linear(vectSize, hidden_size)
-        self.relu1 = nn.ReLU()
         self.rnn1 = nn.LSTMCell(hidden_size, hidden_size)
         self.rnn2 = nn.LSTMCell(hidden_size, hidden_size)
         self.out = nn.Linear(hidden_size, vectSize)
 
     def forward(self, xData, memory1, memory2):
 
-        xData = self.lin1(xData)
-        xData = self.relu1(xData)
+        xData = F.relu(self.lin1(xData))
         hx1, cx1 = self.rnn1(xData, memory1)
         hx2, cx2 = self.rnn2(hx1, memory2)
-        output = self.out(hx2)
+        output = F.log_softmax(self.out(hx2), dim=1)
 
         return output, (hx1,cx1), (hx2,cx2)
 
 model = SimpleRNN(nbNeuron).cuda()
-criterion = nn.MSELoss()
+criterion = nn.NLLLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
 # ==============================================================================
@@ -90,7 +89,7 @@ optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 #4366250 / 25 -> 174650, 174650 / 25 -> 6986
 
 seqLentgh = 25 # real length is 24, 25 for last label
-nbIt = 1000000
+nbIt = 50000
 lossList = []
 
 start = time.time()
@@ -119,7 +118,8 @@ for i in range(nbIt):
         xData = torch.FloatTensor(data[:,idx]).cuda()
         outputs, hidden1, hidden2 = model(xData, hidden1, hidden2)
         target = data[:,idx+1]
-        target = torch.FloatTensor(target).cuda()
+        target = np.argmax(target, axis=1)
+        target = torch.LongTensor(target).cuda()
         loss = criterion(outputs, target)
         fullLoss = torch.add(fullLoss, loss)
 
@@ -181,16 +181,21 @@ for chars in charsToTest:
             predictions += [output[0]]
 
         for i in range(500):
+
             output, hidden1, hidden2 = model(lastOutput, hidden1, hidden2)
-            lastOutput = output
-            predictions += [output[0]]
+            idx = predToOneHot(output[0].data.cpu().numpy())
+            vect = np.zeros(vectSize)
+            vect[idx] = 1
+            chosenOutput = torch.FloatTensor(vect).cuda()
+            predictions += [chosenOutput]
+            lastOutput = chosenOutput.unsqueeze(0)
 
     strPred += ""
 
     for vect in predictions:
 
         npVect = vect.data.cpu().numpy()
-        index = predToOneHot(npVect)
+        index = np.argmax(npVect)
         strPred += allChar[index]
 
     strPred += "\n\n\n"

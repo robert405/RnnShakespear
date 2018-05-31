@@ -1,104 +1,206 @@
 import torch
 import torch.nn as nn
-from torch.nn import functional as F
-from torch.autograd import Variable
-from torch import optim
+import torch.nn.functional as F
 import numpy as np
-import math, random
+import matplotlib.pyplot as plt
+from random import randint
+import time
 
-# Generating a noisy multi-sin wave
+def predToOneHot(pred):
 
-def sine_2(X, signal_freq=60.):
-    return (np.sin(2 * np.pi * (X) / signal_freq) + np.sin(4 * np.pi * (X) / signal_freq)) / 2.0
+    #idx = np.argmax(pred[0])
+    sortIdx = np.argsort(pred)
+    reverseSortIdx = sortIdx[::-1]
+    randomInt = randint(0,2)
+    idx = reverseSortIdx[randomInt]
 
-def noisy(Y, noise_range=(-0.05, 0.05)):
-    noise = np.random.uniform(noise_range[0], noise_range[1], size=Y.shape)
-    return Y + noise
+    return idx
 
-def sample(sample_size):
-    random_offset = random.randint(0, sample_size)
-    X = np.arange(sample_size)
-    Y = noisy(sine_2(X + random_offset))
-    return Y
+def randSeq(length, seq):
 
-# Define the model
+    seqSize = len(seq)
+    randomInt = randint(0,seqSize-length-1)
+    randSeq = seq[randomInt : randomInt+length]
+
+    return randSeq
+
+# ==============================================================================
+# fetch data
+
+fileName = "./shakespeare-plays/alllines.txt"
+
+file = open(fileName,"r")
+strFile = file.read()
+strFile = strFile.replace('"', '')
+strList = list(strFile)
+file.close()
+
+# ==============================================================================
+#create dictionary to map char to vector
+
+allChar = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -,.?!:()[]'$\t\n"
+index = 0
+charToVect = {}
+vectSize = len(allChar) # = 77
+
+for char in allChar:
+
+    vect = np.zeros(vectSize)
+    vect[index] = 1
+    charToVect[char] = vect
+    index += 1
+
+vectList = []
+for char in strList:
+    vectList += [charToVect[char]]
+
+# ==============================================================================
+
+batch_size = 50
+nbNeuron = 512
 
 class SimpleRNN(nn.Module):
     def __init__(self, hidden_size):
+
         super(SimpleRNN, self).__init__()
         self.hidden_size = hidden_size
 
-        self.inp = nn.Linear(1, hidden_size)
-        self.rnn = nn.LSTM(hidden_size, hidden_size, 2, dropout=0.05)
-        self.out = nn.Linear(hidden_size, 1)
+        self.lin1 = nn.Linear(vectSize, hidden_size)
+        self.rnn1 = nn.LSTMCell(hidden_size, hidden_size)
+        self.rnn2 = nn.LSTMCell(hidden_size, hidden_size)
+        self.out = nn.Linear(hidden_size, vectSize)
 
-    def step(self, input, hidden=None):
-        input = self.inp(input.view(1, -1)).unsqueeze(1)
-        output, hidden = self.rnn(input, hidden)
-        output = self.out(output.squeeze(1))
-        return output, hidden
+    def forward(self, xData, memory1, memory2):
 
-    def forward(self, inputs, hidden=None, force=True, steps=0):
-        if force or steps == 0: steps = len(inputs)
-        outputs = Variable(torch.zeros(steps, 1, 1))
-        for i in range(steps):
-            if force or i == 0:
-                input = inputs[i]
-            else:
-                input = output
-            output, hidden = self.step(input, hidden)
-            outputs[i] = output
-        return outputs, hidden
+        xData = F.relu(self.lin1(xData))
+        hx1, cx1 = self.rnn1(xData, memory1)
+        hx2, cx2 = self.rnn2(hx1, memory2)
+        output = F.log_softmax(self.out(hx2), dim=1)
 
-n_epochs = 100
-n_iters = 50
-hidden_size = 10
+        return output, (hx1,cx1), (hx2,cx2)
 
-model = SimpleRNN(hidden_size)
-criterion = nn.MSELoss()
-optimizer = optim.SGD(model.parameters(), lr=0.01)
+model = SimpleRNN(nbNeuron).cuda()
+criterion = nn.NLLLoss()
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
-losses = np.zeros(n_epochs) # For plotting
+# ==============================================================================
 
-for epoch in range(n_epochs):
+# how many char in the dataset and how separate to make batche size of 25 x 25
+#4366250 / 25 -> 174650, 174650 / 25 -> 6986
 
-    for iter in range(n_iters):
-        _inputs = sample(50)
-        inputs = Variable(torch.from_numpy(_inputs[:-1]).float())
-        targets = Variable(torch.from_numpy(_inputs[1:]).float())
+seqLentgh = 25 # real length is 24, 25 for last label
+nbIt = 50000
+lossList = []
 
-        # Use teacher forcing 50% of the time
-        force = random.random() < 0.5
-        outputs, hidden = model(inputs, None, force)
+start = time.time()
 
-        optimizer.zero_grad()
-        loss = criterion(outputs, targets)
-        loss.backward()
-        optimizer.step()
+for i in range(nbIt):
 
-        losses[epoch] += loss.data[0]
+    data = []
 
-    if epoch > 0:
-        print(epoch, loss.data[0])
+    for j in range(batch_size):
+        data += [randSeq(seqLentgh, vectList)]
 
-    # Use some plotting library
-    # if epoch % 10 == 0:
-        # show_plot('inputs', _inputs, True)
-        # show_plot('outputs', outputs.data.view(-1), True)
-        # show_plot('losses', losses[:epoch] / n_iters)
+    data = np.array(data)
 
-        # Generate a test
-        # outputs, hidden = model(inputs, False, 50)
-        # show_plot('generated', outputs.data.view(-1), True)
+    fullLoss = torch.zeros(1).cuda()
 
-# Online training
-hidden = None
+    hx1 = torch.zeros(batch_size, nbNeuron).cuda()
+    cx1 = torch.zeros(batch_size, nbNeuron).cuda()
+    hidden1 = (hx1,cx1)
 
-while True:
-    inputs = get_latest_sample()
-    outputs, hidden = model(inputs, hidden)
+    hx2 = torch.zeros(batch_size, nbNeuron).cuda()
+    cx2 = torch.zeros(batch_size, nbNeuron).cuda()
+    hidden2 = (hx2, cx2)
+
+    for idx in range(seqLentgh-1):
+
+        xData = torch.FloatTensor(data[:,idx]).cuda()
+        outputs, hidden1, hidden2 = model(xData, hidden1, hidden2)
+        target = data[:,idx+1]
+        target = np.argmax(target, axis=1)
+        target = torch.LongTensor(target).cuda()
+        loss = criterion(outputs, target)
+        fullLoss = torch.add(fullLoss, loss)
 
     optimizer.zero_grad()
-    loss = criterion(outputs, inputs)
-    loss.backward()
+    fullLoss.backward()
     optimizer.step()
+
+    currentLoss = fullLoss.data.cpu().numpy()[0]
+    lossList += [currentLoss]
+
+    if (i % 500 == 0):
+        print("Step : " + str(i) + " / " + str(nbIt) + ", Current Loss : " + str(currentLoss))
+
+    if (i % 5000 == 0):
+        end = time.time()
+        timeTillNow = end - start
+        predictedRemainingTime = (timeTillNow / (i + 1)) * (nbIt - (i + 1))
+        print("--------------------------------------------------------------------")
+        print("Time to run since started (sec) : " + str(timeTillNow))
+        print("Predicted remaining time (sec) : " + str(predictedRemainingTime))
+        print("--------------------------------------------------------------------")
+
+
+end = time.time()
+print("Time to run in second : " + str(end - start))
+
+testName = "RnnPytorchImplementation"
+
+plt.plot(lossList)
+plt.savefig("./PerformanceData/" + testName + "_LossGraph.png")
+plt.show()
+
+print("---------------------------------------------")
+
+batch_size = 1
+strPred = ""
+charsToTest = ["So shaken as we are, so wan with care,","Within this hour it will be dinner-time:","You sheep, and I pasture: shall that finish the jest?", "S","T","A"]
+
+for chars in charsToTest:
+
+    predictions = []
+
+    with torch.no_grad():
+
+        lastOutput = torch.zeros(1,vectSize).cuda()
+        hx1 = torch.zeros(batch_size, nbNeuron).cuda()
+        cx1 = torch.zeros(batch_size, nbNeuron).cuda()
+        hidden1 = (hx1, cx1)
+
+        hx2 = torch.zeros(batch_size, nbNeuron).cuda()
+        cx2 = torch.zeros(batch_size, nbNeuron).cuda()
+        hidden2 = (hx2, cx2)
+
+        for char in chars:
+            charVect = [charToVect[char]]
+            charVect = torch.FloatTensor(charVect).cuda()
+            output, hidden1, hidden2 = model(charVect, hidden1, hidden2)
+            lastOutput = output
+            predictions += [output[0]]
+
+        for i in range(500):
+
+            output, hidden1, hidden2 = model(lastOutput, hidden1, hidden2)
+            idx = predToOneHot(output[0].data.cpu().numpy())
+            vect = np.zeros(vectSize)
+            vect[idx] = 1
+            chosenOutput = torch.FloatTensor(vect).cuda()
+            predictions += [chosenOutput]
+            lastOutput = chosenOutput.unsqueeze(0)
+
+    strPred += ""
+
+    for vect in predictions:
+
+        npVect = vect.data.cpu().numpy()
+        index = np.argmax(npVect)
+        strPred += allChar[index]
+
+    strPred += "\n\n\n"
+
+text_file = open("./PerformanceData/" + testName + "_GenerateText.txt", "w")
+text_file.write(strPred)
+text_file.close()
+print(strPred)
